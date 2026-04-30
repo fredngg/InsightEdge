@@ -1,8 +1,6 @@
 # API keys and secrets — NEVER commit
 .env
 
-# Research output data — may contain customer company intelligence
-data/
 
 # Internal business documents
 BRD/
