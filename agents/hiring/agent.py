@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agents.base import BaseAgent
@@ -30,6 +31,25 @@ from agents.hiring.models import validate_evidence_item, validate_score_breakdow
 from config.settings import ANTHROPIC_API_KEY
 
 _PROMPT_PATH = Path(__file__).parent / "prompt.md"
+_90_DAYS = 90
+
+
+def _filter_stale_evidence(evidence: list[dict]) -> list[dict]:
+    """Remove evidence items where date_posted is older than 90 days. Items with no date pass through."""
+    cutoff = datetime.now(timezone.utc).toordinal() - _90_DAYS
+    kept = []
+    for item in evidence:
+        raw = item.get("date_posted")
+        if not raw or not isinstance(raw, str):
+            kept.append(item)
+            continue
+        try:
+            posted = datetime.fromisoformat(raw.strip()).toordinal()
+            if posted >= cutoff:
+                kept.append(item)
+        except ValueError:
+            kept.append(item)  # unparseable date — keep it
+    return kept
 
 
 class HiringPatternAgent(BaseAgent):
@@ -99,6 +119,7 @@ class HiringPatternAgent(BaseAgent):
             context_parts.append(f"Industry: {industry}")
         context_line = "\n".join(context_parts) if context_parts else ""
 
+        cutoff = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return (
             f"## Target Company\n\n"
             f"Company: {company}\n"
@@ -114,6 +135,12 @@ class HiringPatternAgent(BaseAgent):
             "No company link = no hiring signal. "
             "Do not guess. Do not use generic market signals. "
             "Do not attribute a job posting to the company unless public evidence confirms it.\n\n"
+            "## Recency rule\n\n"
+            f"Today is {cutoff}. "
+            "Only include job postings dated within the last 90 days. "
+            "Skip any posting older than 90 days — do not include it in evidence at all. "
+            "For each evidence item, record the posting date in the date_posted field "
+            "(ISO format YYYY-MM-DD). If the date cannot be determined, set date_posted to null.\n\n"
             "## Required output\n\n"
             "Return ONLY valid JSON with this exact schema. "
             "No markdown fences. No text before or after.\n\n"
@@ -197,6 +224,7 @@ class HiringPatternAgent(BaseAgent):
             '      "source_url": "https://...",\n'
             '      "title": "short title of the job posting or page",\n'
             '      "evidence_text": "what was found, 1-2 sentences",\n'
+            '      "date_posted": "YYYY-MM-DD or null if unknown",\n'
             '      "company_match": "High | Medium | Low",\n'
             '      "confidence": "High | Medium | Low",\n'
             '      "counted_in_score": true\n'
@@ -243,6 +271,9 @@ class HiringPatternAgent(BaseAgent):
             if not isinstance(item, dict):
                 continue
             valid_evidence.append(validate_evidence_item(item, i))
+
+        # Drop postings older than 90 days
+        valid_evidence = _filter_stale_evidence(valid_evidence)
         data["evidence"] = valid_evidence
 
         # Validate and enforce score breakdown
