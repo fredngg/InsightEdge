@@ -113,6 +113,12 @@ class PublicNewsAgent(BaseAgent):
             sources_checked.extend(claude_src)
             limitations.extend(claude_lim)
 
+        # Drop evidence older than 90 days (undated items pass through)
+        all_evidence = [
+            e for e in all_evidence
+            if e.get("days_ago", -1) < 0 or e.get("days_ago", -1) <= PRIMARY_WINDOW_DAYS
+        ]
+
         # Final renumber after all layers
         for i, ev in enumerate(all_evidence):
             ev["id"] = f"news_{i + 1:03d}"

@@ -156,6 +156,7 @@ class DirectorAgent:
                 )
                 result.pop("signal", None)
                 account_result["signals"][AGENT_POSITION] = result
+                account_result["total_score"] += result.get("sonar_relevance_score", 0)
 
             # ── Regulatory Impact (ENT only) ──────────────────────────────────
             if AGENT_REGULATORY in active and self.role == ROLE_TERRITORY_MANAGER:

@@ -148,7 +148,7 @@ with col_right:
             help="Requires Tech Stack, Hiring, or News to be meaningful.",
         )
         run_advisor = st.checkbox(
-            "Signal Advisor",
+            "Outreach Suggest",
             value=True,
             key="cb_advisor",
             help="Reads all researched signals and recommends the strongest email hook. Always runs last.",
@@ -210,7 +210,7 @@ with col_right:
             AGENT_PROFILE:     "Company Profile",
             AGENT_STAKEHOLDER: "Stakeholder Intelligence",
             AGENT_PAIN_POINTS: "Developer Pain Points",
-            AGENT_ADVISOR:     "Signal Advisor",
+            AGENT_ADVISOR:     "Outreach Suggest",
         }
         running_names = ", ".join(agent_labels[k] for k in agent_labels if k in agents_to_run)
         st.markdown(f"**Running:** {running_names}")

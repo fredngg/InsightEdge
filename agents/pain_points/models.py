@@ -21,6 +21,7 @@ def validate_evidence_item(item: dict, idx: int) -> dict:
     item.setdefault("source_url", "")
     item.setdefault("title", "")
     item.setdefault("evidence_text", "")
+    item.setdefault("date_posted", None)
     item.setdefault("matched_keywords", [])
     item.setdefault("company_match", "Low")
     item.setdefault("confidence", "Low")

@@ -32,6 +32,26 @@ PERSONALITY_TONES = {
     ),
 }
 
+def build_tone_guidance(personalities: list[str]) -> str:
+    """Return tone instruction string for one or more personality colours."""
+    valid = [p for p in personalities if p in PERSONALITY_TONES]
+    if not valid:
+        return PERSONALITY_TONES["Unknown"]
+    if len(valid) == 1:
+        return PERSONALITY_TONES[valid[0]]
+    labels = " / ".join(valid)
+    individual_notes = "\n".join(
+        f"  - {p}: {PERSONALITY_TONES[p].split('. ', 1)[1] if '. ' in PERSONALITY_TONES[p] else PERSONALITY_TONES[p]}"
+        for p in valid
+    )
+    return (
+        f"PERSONALITY: {labels} (blended). This person shows traits of multiple styles — adapt accordingly.\n"
+        f"{individual_notes}\n"
+        f"Blend these styles: be specific and evidence-grounded, but also decisive and outcome-focused. "
+        f"Do not write a generic email — let the dominant signal in the evidence choose which style leads."
+    )
+
+
 HOOK_QUALITY_RULES = """\
 HOOK QUALITY RULES — the hook_title must be:
 - Specific to this company's situation, not generic

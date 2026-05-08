@@ -20,7 +20,7 @@ Both workstreams produce a ranked propensity-to-buy report and a customised outr
 - Propensity-to-buy scoring and ranking
 - Company position classification (AI Leader → Laggard)
 - Stakeholder intelligence with personality inference (ENT only)
-- Signal Advisor: recommends the strongest email hook based on all gathered signals
+- Outreach Suggest: recommends the strongest email hook based on all gathered signals
 - Email draft generator personalised to contact role and personality
 - Token usage tracking with cost projections
 
@@ -36,7 +36,7 @@ Both workstreams produce a ranked propensity-to-buy report and a customised outr
 | Stakeholder Intelligence | Finds technical leadership and infers personality colour (ENT only) |
 | Developer Pain Points | Searches Stack Overflow, Reddit, GitHub for dev pain signals (Velocity only) |
 | Company Position | Classifies account as AI Leader / Early Adopter / Mainstream / Skeptic / Laggard |
-| Signal Advisor | Synthesises all signals and recommends the strongest outreach hook |
+| Outreach Suggest | Synthesises all signals and recommends the strongest outreach hook |
 
 ## Setup
 

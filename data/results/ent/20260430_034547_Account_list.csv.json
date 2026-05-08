@@ -1939,6 +1939,7 @@
           "position_label": "AI Leader",
           "confidence": "High",
           "classification_score": 10,
+          "sonar_relevance_score": 10,
           "dimension_scores": {
             "ai_innovation_news": 2,
             "hiring_signals": 2,
@@ -2617,7 +2618,7 @@
           ]
         }
       },
-      "total_score": 33.0,
+      "total_score": 43.0,
       "token_usage": {
         "tech_stack": {
           "input": 310246,
@@ -4492,6 +4493,7 @@
           "position_label": "AI Leader",
           "confidence": "High",
           "classification_score": 9,
+          "sonar_relevance_score": 9,
           "dimension_scores": {
             "ai_innovation_news": 2,
             "hiring_signals": 2,
@@ -5150,7 +5152,7 @@
           ]
         }
       },
-      "total_score": 31.5,
+      "total_score": 40.5,
       "token_usage": {
         "tech_stack": {
           "input": 349925,
@@ -6000,6 +6002,7 @@
           "position_label": "Skeptic",
           "confidence": "High",
           "classification_score": 5,
+          "sonar_relevance_score": 5,
           "dimension_scores": {
             "ai_innovation_news": 1,
             "hiring_signals": 1,
@@ -6466,7 +6469,7 @@
           "confidence": "Medium"
         }
       },
-      "total_score": 13.1,
+      "total_score": 18.1,
       "token_usage": {
         "tech_stack": {
           "input": 155788,

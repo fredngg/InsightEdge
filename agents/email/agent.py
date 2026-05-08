@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import re
 from agents.base import BaseAgent
-from agents.email.config import SYSTEM_PROMPT, PERSONALITY_TONES, HOOK_QUALITY_RULES, MAX_BODY_LINES
+from agents.email.config import SYSTEM_PROMPT, PERSONALITY_TONES, HOOK_QUALITY_RULES, MAX_BODY_LINES, build_tone_guidance
 
 
 class EmailDraftAgent(BaseAgent):
@@ -12,14 +12,15 @@ class EmailDraftAgent(BaseAgent):
         company: str,
         target_name: str,
         target_role: str,
-        personality: str,
+        personality: str | list[str],
         selected_items: list[dict],
         company_context: dict,
         company_position: str = "—",
         avoid_hook: str = "",
         strategy_note: str = "",
     ) -> dict:
-        tone = PERSONALITY_TONES.get(personality, PERSONALITY_TONES["Unknown"])
+        personalities = personality if isinstance(personality, list) else [personality]
+        tone = build_tone_guidance(personalities)
         prompt = self._build_prompt(
             company, target_name, target_role, tone,
             selected_items, company_context, company_position,
@@ -65,8 +66,8 @@ class EmailDraftAgent(BaseAgent):
         )
 
         strategy_section = (
-            f"\n## Signal Advisor Direction — FOLLOW THIS EXACTLY\n"
-            f"The Signal Advisor has analysed all available intelligence and determined the "
+            f"\n## Outreach Suggest Direction — FOLLOW THIS EXACTLY\n"
+            f"The Outreach Suggest agent has analysed all available intelligence and determined the "
             f"following hook strategy. Do NOT invent a different angle. Build the email "
             f"around this direction using the signal evidence below as supporting proof.\n\n"
             f"{strategy_note}\n"
@@ -118,7 +119,7 @@ Return valid JSON only. No markdown, no extra text.
   "body": "...",
   "hook_title": "...",
   "hook_summary": "...",
-  "tone_used": "{tone.split('.')[0].replace('PERSONALITY: ', '')}",
+  "tone_used": "{tone.split('(')[1].split(')')[0] if '(' in tone else tone.split('.')[0].replace('PERSONALITY: ', '')}",
   "main_signal_used": "one-line description of the primary signal used",
   "supporting_signal_used": "one-line description or empty string if none used",
   "cta_type": "one of: direct_question | evidence_question | collaborative_offer | forward_question | open_question"

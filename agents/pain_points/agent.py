@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agents.base import BaseAgent
@@ -28,6 +29,25 @@ from agents.pain_points.models import validate_evidence_item, validate_score_bre
 from config.settings import ANTHROPIC_API_KEY
 
 _PROMPT_PATH = Path(__file__).parent / "prompt.md"
+_90_DAYS = 90
+
+
+def _filter_stale_evidence(evidence: list[dict]) -> list[dict]:
+    """Remove evidence items where date_posted is older than 90 days. Items with no date pass through."""
+    cutoff = datetime.now(timezone.utc).toordinal() - _90_DAYS
+    kept = []
+    for item in evidence:
+        raw = item.get("date_posted")
+        if not raw or not isinstance(raw, str):
+            kept.append(item)
+            continue
+        try:
+            posted = datetime.fromisoformat(raw.strip()).toordinal()
+            if posted >= cutoff:
+                kept.append(item)
+        except ValueError:
+            kept.append(item)
+    return kept
 
 
 class PainPointAgent(BaseAgent):
@@ -100,6 +120,7 @@ class PainPointAgent(BaseAgent):
         )
         search_queries = self._build_search_queries(company, domain)
 
+        cutoff = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return (
             f"## Target Company\n\n"
             f"Company: {company}\n"
@@ -117,6 +138,12 @@ class PainPointAgent(BaseAgent):
             "No company link = no pain signal. "
             "Do not guess. Do not use generic developer pain. "
             "Do not attribute a signal to the company unless public evidence supports it.\n\n"
+            "## Recency rule\n\n"
+            f"Today is {cutoff}. "
+            "Only include pain signals posted or discussed within the last 90 days. "
+            "Skip any evidence older than 90 days. "
+            "For each evidence item, record the date in the date_posted field "
+            "(ISO format YYYY-MM-DD). If the date cannot be determined, set date_posted to null.\n\n"
             "## Required output\n\n"
             "Return ONLY valid JSON with this exact schema. "
             "No markdown fences. No text before or after.\n\n"
@@ -271,6 +298,7 @@ class PainPointAgent(BaseAgent):
             '      "source_url": "https://...",\n'
             '      "title": "short title of the evidence",\n'
             '      "evidence_text": "what was found, 1-3 sentences",\n'
+            '      "date_posted": "YYYY-MM-DD or null if unknown",\n'
             '      "matched_keywords": ["SonarQube", "quality gate"],\n'
             '      "company_match": "High | Medium | Low",\n'
             '      "confidence": "High | Medium | Low",\n'
@@ -318,6 +346,9 @@ class PainPointAgent(BaseAgent):
             if not isinstance(item, dict):
                 continue
             valid_evidence.append(validate_evidence_item(item, i))
+
+        # Drop posts older than 90 days
+        valid_evidence = _filter_stale_evidence(valid_evidence)
         data["evidence"] = valid_evidence
 
         # Validate and enforce score breakdown

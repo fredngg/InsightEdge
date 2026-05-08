@@ -548,7 +548,8 @@ def render_account_content(r: dict, show_email: bool = False, velocity_mode: boo
         }
         label = pos.get("position_label", "—")
         color = _pos_colors.get(label, "#94a3b8")
-        with st.expander(f"Company Position  ·  {label}", expanded=True):
+        score_val = pos.get("sonar_relevance_score", pos.get("classification_score", 0))
+        with st.expander(f"Company Position  ·  {label}  ·  {score_val}/10", expanded=True):
             st.markdown(
                 f"<span style='color:{color};font-weight:700;font-size:1rem'>{label}</span>"
                 f"<span style='color:#94a3b8;font-size:0.82rem;margin-left:12px'>"
@@ -660,7 +661,7 @@ def _render_email_panel(r: dict, sigs: dict, selected_items: list, ck: str, velo
     st.markdown("---")
     st.markdown("### Draft Outreach Email")
 
-    # ── Signal Advisor — loaded from stored research result ──────────────────
+    # ── Outreach Suggest — loaded from stored research result ────────────────
     adv_result = st.session_state.get(f"adv_result_{ck}", {})
 
     # Advisor output
@@ -672,8 +673,8 @@ def _render_email_panel(r: dict, sigs: dict, selected_items: list, ck: str, velo
             "<div style='background:rgba(148,163,184,0.06);border:1px solid #1e293b;"
             "border-radius:10px;padding:14px 18px;margin-bottom:14px'>"
             "<span style='color:#94a3b8;font-size:0.83rem'>"
-            "Signal Advisor was not included in this research run. "
-            "Enable <strong>Signal Advisor</strong> on the Home page before running research, "
+            "Outreach Suggest was not included in this research run. "
+            "Enable <strong>Outreach Suggest</strong> on the Home page before running research, "
             "or click <strong>Run Advisor Now</strong> below.</span></div>",
             unsafe_allow_html=True,
         )
@@ -843,18 +844,25 @@ def _render_email_panel(r: dict, sigs: dict, selected_items: list, ck: str, velo
                     except (ValueError, IndexError):
                         pass
 
-            personality_key = f"eml_personality_{ck}"
-            if personality_key not in st.session_state:
-                st.session_state[personality_key] = default_personality
-
-            personality = st.radio(
-                "TONE",
-                options=_PERSONALITY_OPTIONS,
-                key=personality_key,
-                horizontal=True,
+            st.markdown(
+                "<span style='font-size:0.75rem;color:#94a3b8;text-transform:uppercase;"
+                "letter-spacing:0.08em'>TONE</span>",
+                unsafe_allow_html=True,
             )
+            pers_cols = st.columns(len(_PERSONALITY_OPTIONS))
+            personality = []
+            for col, opt in zip(pers_cols, _PERSONALITY_OPTIONS):
+                with col:
+                    checked = st.checkbox(
+                        opt,
+                        value=(opt == default_personality),
+                        key=f"eml_pers_{ck}_{opt}",
+                    )
+                    if checked:
+                        personality.append(opt)
+            if not personality:
+                personality = ["Unknown"]
 
-            pers_color = _PERSONALITY_COLORS.get(personality, "#94a3b8")
             desc = {
                 "Red":     "Direct, results-focused, no fluff",
                 "Blue":    "Analytical, evidence-based, detailed",
@@ -862,8 +870,10 @@ def _render_email_panel(r: dict, sigs: dict, selected_items: list, ck: str, velo
                 "Yellow":  "Visionary, enthusiastic, big-picture",
                 "Unknown": "Neutral, professional, fact-led",
             }
+            pers_color = _PERSONALITY_COLORS.get(personality[0], "#94a3b8")
+            desc_text = "  ·  ".join(desc.get(p, "") for p in personality)
             st.markdown(
-                f"<span style='color:{pers_color};font-size:0.8rem'>{desc.get(personality,'')}</span>",
+                f"<span style='color:{pers_color};font-size:0.8rem'>{desc_text}</span>",
                 unsafe_allow_html=True,
             )
 

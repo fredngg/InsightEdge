@@ -130,6 +130,7 @@ class CompanyPositionAgent(BaseAgent):
             "position_label": position_label,
             "confidence": confidence,
             "classification_score": classification_score,
+            "sonar_relevance_score": classification_score,
             "dimension_scores": dim_scores,
             "skeptic_flags": skeptic_flags,
             "evidence": raw_evidence,
