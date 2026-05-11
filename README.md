@@ -23,6 +23,8 @@ Both workstreams produce a ranked propensity-to-buy report and a customised outr
 - Outreach Suggest: recommends the strongest email hook based on all gathered signals
 - Email draft generator personalised to contact role and personality
 - Token usage tracking with cost projections
+- **Crash-safe runs:** results are checkpointed to disk after every account, so an interrupted batch can be resumed without re-running completed work
+- **Automatic retry on rate limits:** all Anthropic API calls retry transient `429` / `5xx` / connection errors with exponential backoff and `Retry-After` honouring
 
 ## Agents
 
@@ -89,6 +91,44 @@ data/            # Saved research results (JSON)
 ui/              # Streamlit pages and rendering helpers
 main.py          # App entry point and navigation
 ```
+
+## Reliability
+
+### Resume from interruption
+
+While a batch is running, the director writes a `<timestamp>_<source>_INPROGRESS.json` checkpoint
+into `data/results/{ent,velocity}/` after every account. If the process is killed or the browser
+tab is closed mid-run, re-submitting the same source list automatically resumes:
+
+```
+Resuming previous run — 47 account(s) already analysed will be skipped.
+```
+
+Resume is keyed on `(company, domain)`. The partial file is replaced atomically (temp-write +
+rename) so it is always a valid JSON document. On successful completion the file is renamed to
+its final `<timestamp>_<source>.json`. Partial files are not shown in the run list.
+
+### Retry on transient API errors
+
+`agents/base.py:safe_create` wraps every `client.messages.create` call. Retries:
+
+- `RateLimitError` (HTTP 429)
+- `APIStatusError` with status 5xx
+- `APIConnectionError`
+
+Backoff is exponential (base 2s, ±30% jitter, capped at 60s), up to 6 attempts. If the response
+includes a `retry-after` header, it is honoured in place of the computed backoff. 4xx errors
+other than 429 are not retried — they fail fast.
+
+## Scaling notes
+
+The pipeline is currently single-threaded across accounts. With ~860 K input tokens per ENT
+account on Anthropic Tier 1 (~40 K input TPM, ~50 RPM), the practical ceiling for a single
+uninterrupted batch is roughly 10–20 accounts in 20–40 minutes. Larger batches are reliable —
+they will checkpoint and resume — but will take multiple hours.
+
+Higher throughput (account-level concurrency, process-wide rate limiter, background-thread UI)
+is planned in subsequent phases.
 
 ## Security
 

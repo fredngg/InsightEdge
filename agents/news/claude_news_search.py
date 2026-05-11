@@ -12,6 +12,7 @@ import re
 import json
 import anthropic
 
+from agents.base import safe_create
 from agents.common.models import SearchResult
 from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
@@ -25,57 +26,48 @@ class ClaudeNewsSearchTool:
         key = api_key or ANTHROPIC_API_KEY
         self._client = anthropic.Anthropic(api_key=key) if key else None
         self.model = model or CLAUDE_MODEL
-        self._last_limitations: list[str] = []
-        self._last_input_tokens: int = 0
-        self._last_output_tokens: int = 0
 
     @property
     def is_configured(self) -> bool:
         return self._client is not None
 
-    @property
-    def last_limitations(self) -> list[str]:
-        return list(self._last_limitations)
-
-    @property
-    def last_token_usage(self) -> dict:
-        return {"input": self._last_input_tokens, "output": self._last_output_tokens}
-
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def search(self, company: str, domain: str = "") -> list[SearchResult]:
-        self._last_limitations = []
-        self._last_input_tokens = 0
-        self._last_output_tokens = 0
+    def search(
+        self, company: str, domain: str = "",
+    ) -> tuple[list[SearchResult], list[str], dict]:
+        """Return ``(results, limitations, usage)``."""
+        limitations: list[str] = []
+        usage = {"input": 0, "output": 0}
 
         if not self._client:
-            self._last_limitations.append(
+            limitations.append(
                 "Claude news search is not configured because ANTHROPIC_API_KEY is missing."
             )
-            return []
+            return [], limitations, usage
 
         prompt = self._build_prompt(company, domain)
 
         try:
-            raw_text, limitations = self._run_with_web_search(prompt)
-            self._last_limitations.extend(limitations)
+            raw_text, loop_limitations = self._run_with_web_search(prompt, usage)
+            limitations.extend(loop_limitations)
         except Exception as e:
-            self._last_limitations.append(f"Claude news search API error: {e}")
-            return []
+            limitations.append(f"Claude news search API error: {e}")
+            return [], limitations, usage
 
         if not raw_text:
-            self._last_limitations.append("Claude news search returned no usable response.")
-            return []
+            limitations.append("Claude news search returned no usable response.")
+            return [], limitations, usage
 
         results, parse_limitations = self._parse_response(raw_text)
-        self._last_limitations.extend(parse_limitations)
+        limitations.extend(parse_limitations)
 
         if not results:
-            self._last_limitations.append(
+            limitations.append(
                 f"Claude news search found no relevant articles for '{company}'."
             )
 
-        return results
+        return results, limitations, usage
 
     # ── Prompt ────────────────────────────────────────────────────────────────
 
@@ -130,25 +122,27 @@ Rules:
 
     # ── Agentic web search loop ───────────────────────────────────────────────
 
-    def _run_with_web_search(self, prompt: str) -> tuple[str, list[str]]:
+    def _run_with_web_search(self, prompt: str, usage: dict) -> tuple[str, list[str]]:
         """
         Agentic loop for web_search_20250305.
         This tool is server-side: Anthropic executes the search automatically.
         The client continues the loop by acknowledging tool_use with empty content.
+        Mutates the caller-provided ``usage`` dict with running token totals.
         """
         messages = [{"role": "user", "content": prompt}]
         tools = [{"type": "web_search_20250305", "name": "web_search"}]
         limitations: list[str] = []
 
         for iteration in range(_MAX_SEARCH_ITERATIONS):
-            response = self._client.messages.create(
+            response = safe_create(
+                self._client,
                 model=self.model,
                 max_tokens=4096,
                 tools=tools,
                 messages=messages,
             )
-            self._last_input_tokens += response.usage.input_tokens
-            self._last_output_tokens += response.usage.output_tokens
+            usage["input"] += response.usage.input_tokens
+            usage["output"] += response.usage.output_tokens
 
             text_output = "\n".join(
                 b.text for b in response.content

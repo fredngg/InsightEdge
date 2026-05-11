@@ -87,9 +87,10 @@ class CompanyPositionAgent(BaseAgent):
         )
 
         # ── Step 5: Claude interpretation ─────────────────────────────────────
+        usage = {"input": 0, "output": 0}
         if raw_evidence or classification_score > 0:
             try:
-                interp = self._ask_claude_interpret(
+                interp, usage = self._ask_claude_interpret(
                     company,
                     raw_evidence,
                     dim_scores,
@@ -138,6 +139,7 @@ class CompanyPositionAgent(BaseAgent):
             "classification_reason": interp.get("classification_reason", ""),
             "recommended_sales_angle": interp.get("recommended_sales_angle", ""),
             "limitations": interp.get("limitations", []),
+            "_usage": usage,
         }
 
     # ── Evidence extraction ───────────────────────────────────────────────────
@@ -521,7 +523,7 @@ class CompanyPositionAgent(BaseAgent):
         position_label: str,
         confidence: str,
         skeptic_flags: list[str],
-    ) -> dict:
+    ) -> tuple[dict, dict]:
         system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
         ev_summary = [
@@ -547,8 +549,8 @@ class CompanyPositionAgent(BaseAgent):
             "summary, classification_reason, recommended_sales_angle, limitations."
         )
 
-        raw = self.ask_claude(system_prompt, user_message)
-        return self._safe_json_loads(raw)
+        raw, usage = self.ask_claude(system_prompt, user_message)
+        return self._safe_json_loads(raw), usage
 
     def _safe_json_loads(self, text: str) -> dict:
         text = text.strip()

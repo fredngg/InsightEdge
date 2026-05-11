@@ -28,7 +28,7 @@ class EmailDraftAgent(BaseAgent):
             strategy_note=strategy_note,
         )
         try:
-            raw = self.ask_claude(SYSTEM_PROMPT, prompt)
+            raw, _usage = self.ask_claude(SYSTEM_PROMPT, prompt)
             result = self._parse(raw)
             return self._check_length(result)
         except Exception as e:

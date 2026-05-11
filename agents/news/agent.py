@@ -77,6 +77,7 @@ class PublicNewsAgent(BaseAgent):
         all_evidence: list[dict] = []
         sources_checked: list[dict] = []
         limitations: list[str] = []
+        usage = {"input": 0, "output": 0}
 
         # Layer 1: Google News RSS
         rss_ev, rss_src, rss_lim = self._fetch_google_news_rss(company, domain, now)
@@ -106,12 +107,14 @@ class PublicNewsAgent(BaseAgent):
 
         # Layer 3: Claude web search fallback (fetch + validate each URL)
         if counted_initial < WEAK_EVIDENCE_THRESHOLD and self._claude_search.is_configured:
-            claude_ev, claude_src, claude_lim = self._fetch_claude_search_evidence(
+            claude_ev, claude_src, claude_lim, claude_usage = self._fetch_claude_search_evidence(
                 company, domain, window_days, now
             )
             all_evidence.extend(claude_ev)
             sources_checked.extend(claude_src)
             limitations.extend(claude_lim)
+            usage["input"] += claude_usage["input"]
+            usage["output"] += claude_usage["output"]
 
         # Drop evidence older than 90 days (undated items pass through)
         all_evidence = [
@@ -131,9 +134,11 @@ class PublicNewsAgent(BaseAgent):
         # Claude interpretation
         if all_evidence:
             try:
-                interp = self._ask_claude_interpret(
+                interp, interp_usage = self._ask_claude_interpret(
                     company, all_evidence, score, breakdown, window_used
                 )
+                usage["input"] += interp_usage["input"]
+                usage["output"] += interp_usage["output"]
             except Exception as e:
                 limitations.append(f"Claude interpretation error: {e}")
                 interp = {
@@ -178,6 +183,7 @@ class PublicNewsAgent(BaseAgent):
             "confidence": confidence,
             "limitations": limitations,
             "sources_checked": sources_checked,
+            "_usage": usage,
         }
 
     # ── Layer 1: Google News RSS ──────────────────────────────────────────────
@@ -357,14 +363,11 @@ class PublicNewsAgent(BaseAgent):
 
     def _fetch_claude_search_evidence(
         self, company: str, domain: str, window_days: int, now: datetime
-    ) -> tuple[list, list, list]:
+    ) -> tuple[list, list, list, dict]:
         evidence, sources_checked, limitations = [], [], []
 
-        search_results = self._claude_search.search(company, domain)
-        limitations.extend(self._claude_search.last_limitations)
-        usage = self._claude_search.last_token_usage
-        self._input_tokens += usage["input"]
-        self._output_tokens += usage["output"]
+        search_results, search_limitations, usage = self._claude_search.search(company, domain)
+        limitations.extend(search_limitations)
 
         for i, result in enumerate(search_results):
             sources_checked.append({
@@ -413,7 +416,7 @@ class PublicNewsAgent(BaseAgent):
                 "counted_in_score": counted,
             })
 
-        return evidence, sources_checked, limitations
+        return evidence, sources_checked, limitations, usage
 
     def _fetch_and_validate_url(
         self, url: str, company: str, domain: str, now: datetime
@@ -701,7 +704,7 @@ class PublicNewsAgent(BaseAgent):
         score: float,
         breakdown: dict,
         window_used: str,
-    ) -> dict:
+    ) -> tuple[dict, dict]:
         system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
         ev_summary = [
@@ -734,8 +737,8 @@ class PublicNewsAgent(BaseAgent):
             "pipeline, exposing CI credentials across three product teams.\"}"
         )
 
-        raw = self.ask_claude(system_prompt, user_message)
-        return self._safe_json_loads(raw)
+        raw, usage = self.ask_claude(system_prompt, user_message)
+        return self._safe_json_loads(raw), usage
 
     def _safe_json_loads(self, text: str) -> dict:
         text = text.strip()

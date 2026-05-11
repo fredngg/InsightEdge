@@ -61,13 +61,15 @@ class TechStackAgent(BaseAgent):
                 system_prompt=system_prompt,
                 user_message=user_message,
             )
-            self._input_tokens += loop_in
-            self._output_tokens += loop_out
         except Exception as e:
             return self._safe_fallback(company, domain, f"Tech search API error: {e}")
 
+        usage = {"input": loop_in, "output": loop_out}
+
         if not raw_text:
-            return self._safe_fallback(company, domain, "Tech search returned no usable response")
+            return self._safe_fallback(
+                company, domain, "Tech search returned no usable response", usage=usage,
+            )
 
         result = self._parse_response(raw_text)
         if result is None:
@@ -75,6 +77,7 @@ class TechStackAgent(BaseAgent):
                 company, domain,
                 f"Could not parse tech search response as JSON. "
                 f"Raw response (first 500 chars): {raw_text[:500]}",
+                usage=usage,
             )
 
         result["company"] = company
@@ -86,6 +89,7 @@ class TechStackAgent(BaseAgent):
             result.setdefault("limitations", [])
             result["limitations"].extend(loop_limitations)
 
+        result["_usage"] = usage
         return result
 
     # ── Prompt builder ────────────────────────────────────────────────────────
@@ -342,7 +346,9 @@ class TechStackAgent(BaseAgent):
                         break
         return {}
 
-    def _safe_fallback(self, company: str, domain: str, reason: str) -> dict:
+    def _safe_fallback(
+        self, company: str, domain: str, reason: str, usage: dict | None = None,
+    ) -> dict:
         return {
             "company": company,
             "domain": domain,
@@ -361,4 +367,5 @@ class TechStackAgent(BaseAgent):
             "evidence": [],
             "limitations": [reason],
             "sources_checked": [],
+            "_usage": usage or {"input": 0, "output": 0},
         }

@@ -22,7 +22,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from dateutil import parser as dateutil_parser
 
-from agents.base import BaseAgent
+from agents.base import BaseAgent, safe_create
 from agents.regulatory.config import (
     SCORE_CAPS,
     TOTAL_SCORE_CAP,
@@ -100,13 +100,18 @@ class RegulatoryImpactAgent(BaseAgent):
         )
 
         try:
-            response = self.client.messages.create(
+            response = safe_create(
+                self.client,
                 model=self.model,
                 max_tokens=8192,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
             raw_text = response.content[0].text
+            usage = {
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+            }
         except Exception as e:
             return self._safe_fallback(
                 company, domain, f"Regulatory research API error: {e}"
@@ -116,6 +121,7 @@ class RegulatoryImpactAgent(BaseAgent):
             return self._safe_fallback(
                 company, domain,
                 "Regulatory research returned no usable response",
+                usage=usage,
             )
 
         print(f"[REG DEBUG] raw_text length={len(raw_text)}")
@@ -127,6 +133,7 @@ class RegulatoryImpactAgent(BaseAgent):
                 company, domain,
                 "Could not parse regulatory research response as JSON. "
                 f"Raw response (first 500 chars): {raw_text[:500]}",
+                usage=usage,
             )
 
         result["company"] = company
@@ -149,6 +156,7 @@ class RegulatoryImpactAgent(BaseAgent):
                 f"Raw response (first 600 chars): {raw_text[:600]}"
             )
 
+        result["_usage"] = usage
         return result
 
     # ── Layer 1: Google News RSS ──────────────────────────────────────────────
@@ -594,7 +602,9 @@ class RegulatoryImpactAgent(BaseAgent):
                         break
         return {}
 
-    def _safe_fallback(self, company: str, domain: str, reason: str) -> dict:
+    def _safe_fallback(
+        self, company: str, domain: str, reason: str, usage: dict | None = None,
+    ) -> dict:
         return {
             "company": company,
             "domain": domain,
@@ -623,4 +633,5 @@ class RegulatoryImpactAgent(BaseAgent):
             "evidence": [],
             "limitations": [reason],
             "sources_checked": [],
+            "_usage": usage or {"input": 0, "output": 0},
         }

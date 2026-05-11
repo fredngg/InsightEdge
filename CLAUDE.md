@@ -143,6 +143,59 @@ Email style: short, direct, personalized — goal is to get a reply / spark a co
 - **Fine-tuning vs fixing:** Team trained to fine-tune (adjust prompts, add indicators, change scoring weights); vendor not expected to provide ongoing Day 2 support
 - **Clean engagement model:** MVP is self-contained; integration into Sonar environment is a separate paid engagement if approved
 
+---
+
+## Engineering Conventions
+
+These are load-bearing implementation details that future work must respect. The architecture is single-threaded today but every contract below is written to be thread-safe so account-level concurrency can be added later without touching agent internals.
+
+### Agent contract
+
+Every `BaseAgent` subclass exposes one entry point (`run(...)` for signal agents, `analyse(...)` for the advisor, `draft(...)` for the email agent) that:
+
+1. Returns a `dict` for the account's signal output.
+2. Includes a reserved key `_usage: {"input": int, "output": int}` aggregating all Claude API tokens spent inside that call. The director pops this key into `account_result["token_usage"][agent_key]`; downstream code never sees `_usage` on the signal dict.
+3. Holds **no mutable token state on `self`**. `BaseAgent` no longer has `_input_tokens` / `_output_tokens` / `_reset_usage` / `_get_usage`. Adding any back will silently break concurrency.
+
+When adding a new helper that calls the Anthropic SDK directly, return its usage alongside its result (`(text, limitations, usage)` is the established shape — see `agents/tech_stack/claude_tech_search.py` for the canonical form). Don't accumulate to `self`.
+
+`BaseAgent.ask_claude(system, user) -> (text, usage_dict)` — callers must unpack. The `usage_dict` keys are `"input"` and `"output"`.
+
+### Calling the Anthropic SDK
+
+**All** `client.messages.create` calls must go through `agents.base.safe_create(client, **kwargs)`. It applies retry with exponential backoff + jitter (base 2s, ±30%, capped at 60s, max 6 attempts) for:
+
+- `anthropic.RateLimitError` (HTTP 429)
+- `anthropic.APIStatusError` with status 5xx
+- `anthropic.APIConnectionError`
+
+It honours `retry-after` response headers. 4xx (other than 429) fails fast. If you find a direct `client.messages.create` call in the codebase, that's a bug — wrap it.
+
+### Checkpointing and resume
+
+`ui/results_store.py` provides:
+
+- `begin_run(role, source_filename) -> handle` — opens a run, returns paths for the in-progress and final files plus base metadata. Files are not created until first write.
+- `save_checkpoint(handle, results)` — atomic temp-write + rename to `<timestamp>_<source>_INPROGRESS.json`. Called once per completed account.
+- `finalize_run(handle, results) -> final_path` — writes the final `<timestamp>_<source>.json`, removes the partial file.
+- `load_partial_run(path) -> (results, metadata)` — for resume.
+- `find_partial_run(role, source_filename) -> path | None` — newest matching `_INPROGRESS` file.
+- `list_runs(role)` — hides `_INPROGRESS` files; UI only shows finalised runs.
+- `save_run(...)` is kept as a one-shot back-compat wrapper.
+
+The director consumes this via two new parameters on `run()`:
+
+- `on_account_complete(account_result, all_results_so_far)` — called after every account, used for checkpoint writes.
+- `resume_from: list[dict]` — already-completed account results to skip. Keying is `(company.strip().lower(), domain.strip().lower())`.
+
+`ui/home.py` wires this up: on submit, it calls `find_partial_run` for the current source filename and auto-resumes if a partial exists, displaying `Resuming previous run — N account(s) already analysed will be skipped.`
+
+### Scalability status
+
+Single-threaded by design today. The agent contract above (stateless, per-call usage in returns) is what enables a future `ThreadPoolExecutor` over accounts. The next planned phases are: (Phase 2) bounded concurrency + process-wide token-bucket rate limiter; (Phase 3) move `director.run` to a background thread polled from Streamlit `session_state`. Within-account agent fanout is deferred until rate-limit headroom exists (Tier upgrade or token reduction).
+
+Per-account cost is roughly 860 K input tokens for ENT (~40–60 Claude calls). On Tier 1 (~40 K input TPM, ~50 RPM) the practical ceiling is ~10–20 accounts per uninterrupted batch; larger batches will checkpoint reliably but take multiple hours.
+
 
 ---
 

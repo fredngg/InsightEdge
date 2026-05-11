@@ -1,6 +1,12 @@
 import streamlit as st
 import pandas as pd
-from ui.results_store import save_run
+from ui.results_store import (
+    begin_run,
+    finalize_run,
+    find_partial_run,
+    load_partial_run,
+    save_checkpoint,
+)
 from ui.theme import inject_theme
 from agents.discovery.agent import CompanyDiscoveryAgent
 
@@ -265,17 +271,38 @@ with col_right:
 
         director = DirectorAgent(role=role)
 
+        # Resume from a prior interrupted run if one exists for this source
+        resume_from: list = []
+        partial_path = find_partial_run(role, src_name)
+        if partial_path:
+            try:
+                resume_from, _ = load_partial_run(partial_path)
+                if resume_from:
+                    st.caption(
+                        f"Resuming previous run — {len(resume_from)} account(s) "
+                        "already analysed will be skipped."
+                    )
+            except Exception:
+                resume_from = []
+
+        handle = begin_run(role, src_name)
+
+        def checkpoint(_account_result, all_so_far):
+            save_checkpoint(handle, all_so_far)
+
         with st.spinner("Agent pipeline running..."):
             results = director.run(
                 accounts,
                 progress_callback=update_progress,
                 agents_to_run=agents_to_run,
+                on_account_complete=checkpoint,
+                resume_from=resume_from,
             )
 
         progress_bar.progress(1.0)
         status_text.caption("Analysis complete.")
 
-        saved_path = save_run(results, role, src_name)
+        saved_path = finalize_run(handle, results)
 
         tabs_key = "ent_tabs" if "Territory" in role else "vel_tabs"
         if tabs_key not in st.session_state:

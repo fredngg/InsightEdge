@@ -57,16 +57,24 @@ class DirectorAgent:
         accounts: list[dict],
         progress_callback=None,
         agents_to_run: set[str] | None = None,
+        on_account_complete=None,
+        resume_from: list[dict] | None = None,
     ) -> list[dict]:
         """
-        accounts        : list of dicts with at least 'company' key, optionally 'domain'
-        progress_callback: optional function(current, total, company_name) for UI updates
-        agents_to_run   : set of agent keys to run; None means run all available for the role
-        returns         : list of result dicts ranked by total_score
+        accounts             : list of dicts with at least 'company' key, optionally 'domain'
+        progress_callback    : optional function(current, total, company_name) for UI updates
+        agents_to_run        : set of agent keys to run; None means run all available for the role
+        on_account_complete  : optional function(account_result, all_results_so_far) called
+                               after each account finishes — used for checkpoint writes
+        resume_from          : optional list of already-completed account result dicts to
+                               skip on re-run, keyed on (company, domain)
+        returns              : list of result dicts ranked by total_score
         """
         active = agents_to_run if agents_to_run is not None else ALL_AGENTS
 
-        results = []
+        resume_from = resume_from or []
+        results = list(resume_from)
+        done_keys = {self._account_key(r) for r in resume_from}
         total = len(accounts)
 
         for i, account in enumerate(accounts):
@@ -92,6 +100,9 @@ class DirectorAgent:
             if not company:
                 continue
 
+            if (company.strip().lower(), (domain or "").strip().lower()) in done_keys:
+                continue
+
             if progress_callback:
                 progress_callback(i + 1, total, company)
 
@@ -104,9 +115,10 @@ class DirectorAgent:
             }
 
             def _run_agent(agent, agent_key, **kwargs):
-                agent._reset_usage()
                 res = agent.run(**kwargs)
-                account_result["token_usage"][agent_key] = agent._get_usage()
+                account_result["token_usage"][agent_key] = res.pop(
+                    "_usage", {"input": 0, "output": 0}
+                )
                 return res
 
             # ── Tech Stack ────────────────────────────────────────────────────
@@ -205,12 +217,17 @@ class DirectorAgent:
 
             # ── Signal Advisor (always last — synthesises all signals above) ──
             if AGENT_ADVISOR in active:
-                self._advisor_agent._reset_usage()
                 adv_result = self._advisor_agent.analyse(company, account_result["signals"])
-                account_result["token_usage"][AGENT_ADVISOR] = self._advisor_agent._get_usage()
+                account_result["token_usage"][AGENT_ADVISOR] = adv_result.pop(
+                    "_usage", {"input": 0, "output": 0}
+                )
                 account_result["signals"][AGENT_ADVISOR] = adv_result
 
             results.append(account_result)
+            done_keys.add(self._account_key(account_result))
+
+            if on_account_complete:
+                on_account_complete(account_result, results)
 
         # Rank by propensity-to-buy score descending
         results.sort(key=lambda x: x["total_score"], reverse=True)
@@ -218,3 +235,9 @@ class DirectorAgent:
             result["rank"] = rank
 
         return results
+
+    @staticmethod
+    def _account_key(result: dict) -> tuple[str, str]:
+        company = str(result.get("company", "")).strip().lower()
+        domain = str(result.get("domain", "")).strip().lower()
+        return company, domain

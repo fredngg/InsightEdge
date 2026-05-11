@@ -21,7 +21,7 @@ import json
 import re
 from pathlib import Path
 
-from agents.base import BaseAgent
+from agents.base import BaseAgent, safe_create
 from agents.stakeholder.config import (
     VALID_STATUSES,
     VALID_CONFIDENCE,
@@ -45,7 +45,7 @@ class StakeholderIntelligenceAgent(BaseAgent):
         prompt = self._build_prompt(company, domain)
 
         try:
-            raw_text, loop_limitations = self._run_with_web_search(prompt)
+            raw_text, loop_limitations, usage = self._run_with_web_search(prompt)
         except Exception as e:
             return self._safe_fallback(
                 company, domain, f"Stakeholder research API error: {e}"
@@ -55,6 +55,7 @@ class StakeholderIntelligenceAgent(BaseAgent):
             return self._safe_fallback(
                 company, domain,
                 "Stakeholder research returned no usable response",
+                usage=usage,
             )
 
         result = self._parse_response(raw_text)
@@ -62,6 +63,7 @@ class StakeholderIntelligenceAgent(BaseAgent):
             return self._safe_fallback(
                 company, domain,
                 "Could not parse stakeholder research response as JSON",
+                usage=usage,
             )
 
         result["company"] = company
@@ -71,6 +73,7 @@ class StakeholderIntelligenceAgent(BaseAgent):
             result.setdefault("limitations", [])
             result["limitations"].extend(loop_limitations)
 
+        result["_usage"] = usage
         return result
 
     # ── Prompt ────────────────────────────────────────────────────────────────
@@ -92,25 +95,28 @@ class StakeholderIntelligenceAgent(BaseAgent):
 
     # ── Agentic web search loop ───────────────────────────────────────────────
 
-    def _run_with_web_search(self, prompt: str) -> tuple[str, list[str]]:
+    def _run_with_web_search(self, prompt: str) -> tuple[str, list[str], dict]:
         """
         Agentic loop for web_search_20250305.
         Server-side: Anthropic executes searches automatically.
         Client acknowledges tool_use with empty tool_result content.
+        Returns ``(text, limitations, usage)``.
         """
         messages = [{"role": "user", "content": prompt}]
         tools = [{"type": "web_search_20250305", "name": "web_search"}]
         limitations: list[str] = []
+        usage = {"input": 0, "output": 0}
 
         for iteration in range(_MAX_SEARCH_ITERATIONS):
-            response = self.client.messages.create(
+            response = safe_create(
+                self.client,
                 model=self.model,
                 max_tokens=8192,
                 tools=tools,
                 messages=messages,
             )
-            self._input_tokens += response.usage.input_tokens
-            self._output_tokens += response.usage.output_tokens
+            usage["input"] += response.usage.input_tokens
+            usage["output"] += response.usage.output_tokens
 
             text_output = "\n".join(
                 b.text for b in response.content
@@ -118,7 +124,7 @@ class StakeholderIntelligenceAgent(BaseAgent):
             )
 
             if response.stop_reason == "end_turn":
-                return text_output, limitations
+                return text_output, limitations, usage
 
             if response.stop_reason == "tool_use":
                 messages.append({"role": "assistant", "content": response.content})
@@ -137,11 +143,11 @@ class StakeholderIntelligenceAgent(BaseAgent):
                 f"{response.stop_reason}"
             )
             if text_output:
-                return text_output, limitations
-            return "", limitations
+                return text_output, limitations, usage
+            return "", limitations, usage
 
         limitations.append("Stakeholder search reached maximum iterations.")
-        return "", limitations
+        return "", limitations, usage
 
     # ── Response parsing and validation ──────────────────────────────────────
 
@@ -249,7 +255,9 @@ class StakeholderIntelligenceAgent(BaseAgent):
                     pass
         return {}
 
-    def _safe_fallback(self, company: str, domain: str, reason: str) -> dict:
+    def _safe_fallback(
+        self, company: str, domain: str, reason: str, usage: dict | None = None,
+    ) -> dict:
         return {
             "company": company,
             "domain": domain,
@@ -259,4 +267,5 @@ class StakeholderIntelligenceAgent(BaseAgent):
             "sources_checked": [],
             "limitations": [reason],
             "confidence": "Low",
+            "_usage": usage or {"input": 0, "output": 0},
         }

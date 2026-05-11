@@ -6,6 +6,7 @@ Python drives the loop; Claude decides which searches to run and what to keep.
 """
 from __future__ import annotations
 
+from agents.base import safe_create
 from agents.hiring.config import MAX_SEARCH_ITERATIONS
 
 
@@ -30,7 +31,8 @@ def run_job_search(
     output_tokens = 0
 
     for iteration in range(MAX_SEARCH_ITERATIONS):
-        response = client.messages.create(
+        response = safe_create(
+            client,
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,

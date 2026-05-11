@@ -48,13 +48,16 @@ specific details, snippet text if available, and why it matters to Sonar",
 }}
 """
         try:
-            raw = self.ask_claude(SYSTEM_PROMPT, prompt)
-            return self._parse(raw)
+            raw, usage = self.ask_claude(SYSTEM_PROMPT, prompt)
+            result = self._parse(raw)
+            result["_usage"] = usage
+            return result
         except Exception as e:
             return {
                 "error": str(e),
                 "hook_title": "", "hook_rationale": "",
                 "strategy_note": "", "suggested_signals": [],
+                "_usage": {"input": 0, "output": 0},
             }
 
     # ── Signal summary builder ────────────────────────────────────────────────
