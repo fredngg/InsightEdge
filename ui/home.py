@@ -1,3 +1,5 @@
+import os
+import time
 import streamlit as st
 import pandas as pd
 from ui.results_store import (
@@ -8,6 +10,14 @@ from ui.results_store import (
     save_checkpoint,
 )
 from ui.theme import inject_theme
+from ui.design import (
+    ACCENT, ACCENT_SOFT, BORDER, CARD, DANGER, INFO, MUTED, RADIUS, SPACE,
+    TEXT, TEXT_DIM, TYPE, WARN,
+)
+from ui.components import (
+    metric_card, micro_label, pill_html, score_bar_html, section_header,
+    spacer, status_pill,
+)
 from agents.discovery.agent import CompanyDiscoveryAgent
 
 inject_theme()
@@ -198,57 +208,157 @@ with col_right:
     st.markdown("<div style='margin-top:32px'></div>", unsafe_allow_html=True)
 
     mode_a_ready = vel_mode_a and bool(vel_countries_input.strip()) and bool(vel_industries_input.strip())
+
+    # ── Compute a likely src_name now so we can detect a partial run ─────
+    _likely_src = ""
+    if vel_mode_a and mode_a_ready:
+        _c = [c.strip() for c in vel_countries_input.split(",") if c.strip()]
+        _i = [c.strip() for c in vel_industries_input.split(",") if c.strip()]
+        _likely_src = f"agent_curated_{'+'.join(_c)}_{'+'.join(_i)}"
+    elif df is not None and uploaded_file is not None:
+        _likely_src = uploaded_file.name
+
+    partial_path = find_partial_run(role, _likely_src) if _likely_src else None
+
+    # ── Resume banner (only when a matching partial is present) ──────────
+    resume_choice_key = "resume_choice"
+    if partial_path:
+        try:
+            partial_results, partial_meta = load_partial_run(partial_path)
+        except Exception:
+            partial_results, partial_meta = [], {}
+        n_done = len(partial_results)
+        prior_date = (partial_meta or {}).get("date", "")[:16].replace("T", " ")
+        spacer("md")
+        st.markdown(
+            f"<div style='background:{ACCENT_SOFT};border:1px solid {ACCENT}55;"
+            f"border-radius:{RADIUS['md']}px;padding:14px 18px'>"
+            f"<div style='color:{ACCENT};font-size:{TYPE['micro']};font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px'>"
+            f"⏸ Partial run detected</div>"
+            f"<div style='color:{TEXT};font-size:{TYPE['small']};line-height:1.5'>"
+            f"<strong style='color:{ACCENT}'>{n_done}</strong> account(s) already analysed "
+            f"from this list on <strong style='color:{ACCENT}'>{prior_date or 'an earlier session'}</strong>. "
+            f"Choose how to proceed:</div></div>",
+            unsafe_allow_html=True,
+        )
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if st.button("▶ Resume", key="rb_resume", type="primary", use_container_width=True):
+                st.session_state[resume_choice_key] = "resume"
+        with b2:
+            if st.button("✕ Start fresh", key="rb_fresh", type="secondary", use_container_width=True):
+                try:
+                    os.remove(partial_path)
+                except OSError:
+                    pass
+                st.session_state[resume_choice_key] = "fresh"
+                st.rerun()
+        with b3:
+            if st.button("👁 View partial", key="rb_view", type="secondary", use_container_width=True):
+                tabs_key = "ent_tabs" if "Territory" in role else "vel_tabs"
+                st.session_state.setdefault(tabs_key, [])
+                st.session_state[tabs_key].append({
+                    "type": "run", "path": partial_path, "label": _likely_src + " (partial)",
+                })
+                st.switch_page(
+                    "ui/ent_accounts.py" if "Territory" in role else "ui/velocity_accounts.py"
+                )
+    spacer("md")
+
     run_disabled = (not vel_mode_a and df is None) or (vel_mode_a and not mode_a_ready) or not agents_to_run
+    run_label = "EXECUTE RESEARCH PIPELINE"
+    if partial_path and st.session_state.get(resume_choice_key) == "resume":
+        run_label = "▶ RESUMING — START NOW"
+
     run_button = st.button(
-        "EXECUTE RESEARCH PIPELINE",
+        run_label,
         type="primary",
         use_container_width=True,
         disabled=run_disabled,
     )
 
     if run_button and agents_to_run and (df is not None or mode_a_ready):
+        # Stable display labels per agent key
         agent_labels = {
             AGENT_TECH_STACK:  "Tech Stack",
-            AGENT_HIRING:      "Hiring Signals",
-            AGENT_NEWS:        "Public News",
-            AGENT_POSITION:    "Company Position",
-            AGENT_REGULATORY:  "Regulatory Impact",
-            AGENT_PROFILE:     "Company Profile",
-            AGENT_STAKEHOLDER: "Stakeholder Intelligence",
-            AGENT_PAIN_POINTS: "Developer Pain Points",
-            AGENT_ADVISOR:     "Outreach Suggest",
+            AGENT_HIRING:      "Hiring",
+            AGENT_NEWS:        "News",
+            AGENT_POSITION:    "Position",
+            AGENT_REGULATORY:  "Regulatory",
+            AGENT_PROFILE:     "Profile",
+            AGENT_STAKEHOLDER: "Stakeholders",
+            AGENT_PAIN_POINTS: "Pain Points",
+            AGENT_ADVISOR:     "Advisor",
         }
-        running_names = ", ".join(agent_labels[k] for k in agent_labels if k in agents_to_run)
-        st.markdown(f"**Running:** {running_names}")
+        active_order = [k for k in agent_labels if k in agents_to_run]
 
+        # ── Live-run chrome slots ────────────────────────────────────────
+        live_header  = st.empty()
         progress_bar = st.progress(0)
         status_text  = st.empty()
+        agent_grid   = st.empty()
+        ticker_slot  = st.empty()
+        stream_slot  = st.empty()
 
-        # ── Mode A: discover accounts first ──────────────────────────────────
+        # State accumulators across iterations
+        agent_states: dict[str, str] = {k: "pending" for k in active_order}
+        account_times: list[float] = []
+        account_start_ref = {"t": time.time()}
+        total_tokens = {"input": 0, "output": 0}
+
+        def _render_agent_grid():
+            pills = "  ".join(status_pill(agent_states[k], agent_labels[k]) for k in active_order)
+            agent_grid.markdown(
+                f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 4px 0'>{pills}</div>",
+                unsafe_allow_html=True,
+            )
+
+        def _render_ticker():
+            tin, tout = total_tokens["input"], total_tokens["output"]
+            ticker_slot.markdown(
+                f"<div style='color:{MUTED};font-size:{TYPE['caption']};margin-top:4px'>"
+                f"Tokens used so far — "
+                f"<strong style='color:{ACCENT}'>{tin:,}</strong> in · "
+                f"<strong style='color:{ACCENT}'>{tout:,}</strong> out</div>",
+                unsafe_allow_html=True,
+            )
+
+        def _format_eta(remaining: int) -> str:
+            if not account_times or remaining <= 0:
+                return "—"
+            import statistics as _stats
+            med = _stats.median(account_times)
+            secs = int(med * remaining)
+            if secs < 60:
+                return f"~{secs}s"
+            m, s = divmod(secs, 60)
+            if m < 60:
+                return f"~{m}m {s}s"
+            h, m = divmod(m, 60)
+            return f"~{h}h {m}m"
+
+        # ── Mode A: discover accounts first ──────────────────────────────
         accounts: list[dict] = []
         src_name = ""
 
         if vel_mode_a:
             countries = [c.strip() for c in vel_countries_input.split(",") if c.strip()]
             industries = [i.strip() for i in vel_industries_input.split(",") if i.strip()]
-
-            status_text.caption("Discovering candidate companies...")
+            status_text.caption("Discovering candidate companies…")
             discovery_agent = CompanyDiscoveryAgent()
             accounts, disc_limitations = discovery_agent.run(
-                countries=countries,
-                industries=industries,
-                count=int(vel_count),
+                countries=countries, industries=industries, count=int(vel_count),
             )
             if disc_limitations:
                 for lim in disc_limitations:
                     st.caption(f"Discovery: {lim}")
-
             src_name = f"agent_curated_{'+'.join(countries)}_{'+'.join(industries)}"
         else:
             accounts = df.to_dict(orient="records")
             src_name = uploaded_file.name if uploaded_file else "velocity_list"
 
-        # ── ENT dedup (both modes, silently skipped if no ENT list) ──────────
+        # ── ENT dedup ─────────────────────────────────────────────────────
         ent_set: set[str] = st.session_state.get("ent_company_set", set())
         if ent_set:
             before = len(accounts)
@@ -265,42 +375,102 @@ with col_right:
             st.error("No accounts to analyze after filtering. Adjust your inputs and try again.")
             st.stop()
 
-        def update_progress(current, total, company):
-            progress_bar.progress(current / total)
-            status_text.caption(f"Analyzing {current}/{total}: {company}")
-
-        director = DirectorAgent(role=role)
-
-        # Resume from a prior interrupted run if one exists for this source
+        # ── Resume gate ───────────────────────────────────────────────────
         resume_from: list = []
-        partial_path = find_partial_run(role, src_name)
-        if partial_path:
+        if partial_path and st.session_state.get(resume_choice_key) == "resume":
             try:
                 resume_from, _ = load_partial_run(partial_path)
-                if resume_from:
-                    st.caption(
-                        f"Resuming previous run — {len(resume_from)} account(s) "
-                        "already analysed will be skipped."
-                    )
             except Exception:
                 resume_from = []
+            if resume_from:
+                st.caption(f"Resuming — {len(resume_from)} account(s) will be skipped.")
 
+        total = len(accounts)
+        live_header.markdown(
+            f"<div style='color:{TEXT};font-size:{TYPE['h2']};font-weight:700;"
+            f"margin-bottom:6px'>Running {total} account(s)</div>",
+            unsafe_allow_html=True,
+        )
+        _render_agent_grid()
+        _render_ticker()
+
+        def update_progress(current, total_count, company):
+            # Account-level callback. Reset per-agent grid; refresh ETA.
+            nonlocal_done = current - 1
+            elapsed = time.time() - account_start_ref["t"]
+            if nonlocal_done >= 1:
+                account_times.append(elapsed)
+            account_start_ref["t"] = time.time()
+            for k in active_order:
+                agent_states[k] = "pending"
+            remaining = total_count - current + 1
+            eta = _format_eta(remaining)
+            progress_bar.progress(min(1.0, (current - 1) / max(total_count, 1)))
+            status_text.markdown(
+                f"<span style='color:{TEXT};font-weight:600'>Account {current} of {total_count}</span>"
+                f" &nbsp;·&nbsp; <span style='color:{ACCENT}'>{company}</span>"
+                f" &nbsp;·&nbsp; <span style='color:{MUTED}'>ETA {eta}</span>",
+                unsafe_allow_html=True,
+            )
+            _render_agent_grid()
+
+        def on_agent_state(agent_key: str, state: str):
+            if agent_key in agent_states:
+                agent_states[agent_key] = state
+                _render_agent_grid()
+
+        director = DirectorAgent(role=role)
         handle = begin_run(role, src_name)
 
-        def checkpoint(_account_result, all_so_far):
+        def checkpoint(account_result, all_so_far):
             save_checkpoint(handle, all_so_far)
+            # Update token ticker
+            usage = account_result.get("token_usage", {}) or {}
+            for v in usage.values():
+                total_tokens["input"]  += int(v.get("input", 0) or 0)
+                total_tokens["output"] += int(v.get("output", 0) or 0)
+            _render_ticker()
+            # Streaming results preview — top 5 by score so far
+            top5 = sorted(all_so_far, key=lambda x: -x.get("total_score", 0))[:5]
+            rows_html = ""
+            for r in top5:
+                comp = r.get("company", "")
+                sc = round(r.get("total_score", 0), 1)
+                rows_html += (
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                    f"padding:8px 12px;border-bottom:1px solid {BORDER}'>"
+                    f"<span style='color:{TEXT};font-weight:600;font-size:{TYPE['small']}'>{comp}</span>"
+                    f"<span style='color:{ACCENT};font-weight:700'>{sc}</span></div>"
+                )
+            stream_slot.markdown(
+                f"<div style='background:{CARD};border:1px solid {BORDER};"
+                f"border-radius:{RADIUS['md']}px;margin-top:14px;overflow:hidden'>"
+                f"<div style='padding:10px 12px;color:{MUTED};font-size:{TYPE['micro']};"
+                f"text-transform:uppercase;letter-spacing:0.08em;font-weight:600;"
+                f"border-bottom:1px solid {BORDER}'>Top results so far · "
+                f"{len(all_so_far)} done</div>{rows_html}</div>",
+                unsafe_allow_html=True,
+            )
 
-        with st.spinner("Agent pipeline running..."):
+        try:
             results = director.run(
                 accounts,
                 progress_callback=update_progress,
                 agents_to_run=agents_to_run,
                 on_account_complete=checkpoint,
                 resume_from=resume_from,
+                agent_progress_callback=on_agent_state,
             )
+        except Exception as e:
+            st.error(f"Pipeline error: {e}")
+            st.stop()
 
         progress_bar.progress(1.0)
-        status_text.caption("Analysis complete.")
+        status_text.markdown(
+            f"<span style='color:{ACCENT};font-weight:700'>✓ Analysis complete</span> &nbsp;·&nbsp; "
+            f"<span style='color:{MUTED}'>{len(results)} accounts ranked</span>",
+            unsafe_allow_html=True,
+        )
 
         saved_path = finalize_run(handle, results)
 
@@ -312,6 +482,7 @@ with col_right:
             "path":  saved_path,
             "label": src_name,
         })
+        st.session_state.pop(resume_choice_key, None)
 
         if "Territory" in role:
             st.switch_page("ui/ent_accounts.py")

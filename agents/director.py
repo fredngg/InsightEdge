@@ -59,16 +59,20 @@ class DirectorAgent:
         agents_to_run: set[str] | None = None,
         on_account_complete=None,
         resume_from: list[dict] | None = None,
+        agent_progress_callback=None,
     ) -> list[dict]:
         """
-        accounts             : list of dicts with at least 'company' key, optionally 'domain'
-        progress_callback    : optional function(current, total, company_name) for UI updates
-        agents_to_run        : set of agent keys to run; None means run all available for the role
-        on_account_complete  : optional function(account_result, all_results_so_far) called
-                               after each account finishes — used for checkpoint writes
-        resume_from          : optional list of already-completed account result dicts to
-                               skip on re-run, keyed on (company, domain)
-        returns              : list of result dicts ranked by total_score
+        accounts                 : list of dicts with at least 'company' key, optionally 'domain'
+        progress_callback        : optional fn(current, total, company_name) for UI updates
+        agents_to_run            : set of agent keys to run; None means run all available for the role
+        on_account_complete      : optional fn(account_result, all_results_so_far) called after each
+                                   account finishes — used for checkpoint writes
+        resume_from              : optional list of already-completed account result dicts to skip on
+                                   re-run, keyed on (company, domain)
+        agent_progress_callback  : optional fn(agent_key, state) where state is one of
+                                   "running" | "done" | "error". Called twice per agent per account
+                                   so UIs can render a live per-agent status grid.
+        returns                  : list of result dicts ranked by total_score
         """
         active = agents_to_run if agents_to_run is not None else ALL_AGENTS
 
@@ -115,10 +119,28 @@ class DirectorAgent:
             }
 
             def _run_agent(agent, agent_key, **kwargs):
-                res = agent.run(**kwargs)
+                if agent_progress_callback:
+                    try:
+                        agent_progress_callback(agent_key, "running")
+                    except Exception:
+                        pass
+                try:
+                    res = agent.run(**kwargs)
+                except Exception:
+                    if agent_progress_callback:
+                        try:
+                            agent_progress_callback(agent_key, "error")
+                        except Exception:
+                            pass
+                    raise
                 account_result["token_usage"][agent_key] = res.pop(
                     "_usage", {"input": 0, "output": 0}
                 )
+                if agent_progress_callback:
+                    try:
+                        agent_progress_callback(agent_key, "done")
+                    except Exception:
+                        pass
                 return res
 
             # ── Tech Stack ────────────────────────────────────────────────────
@@ -217,11 +239,29 @@ class DirectorAgent:
 
             # ── Signal Advisor (always last — synthesises all signals above) ──
             if AGENT_ADVISOR in active:
-                adv_result = self._advisor_agent.analyse(company, account_result["signals"])
+                if agent_progress_callback:
+                    try:
+                        agent_progress_callback(AGENT_ADVISOR, "running")
+                    except Exception:
+                        pass
+                try:
+                    adv_result = self._advisor_agent.analyse(company, account_result["signals"])
+                except Exception:
+                    if agent_progress_callback:
+                        try:
+                            agent_progress_callback(AGENT_ADVISOR, "error")
+                        except Exception:
+                            pass
+                    raise
                 account_result["token_usage"][AGENT_ADVISOR] = adv_result.pop(
                     "_usage", {"input": 0, "output": 0}
                 )
                 account_result["signals"][AGENT_ADVISOR] = adv_result
+                if agent_progress_callback:
+                    try:
+                        agent_progress_callback(AGENT_ADVISOR, "done")
+                    except Exception:
+                        pass
 
             results.append(account_result)
             done_keys.add(self._account_key(account_result))
